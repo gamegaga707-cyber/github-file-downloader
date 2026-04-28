@@ -11,6 +11,11 @@ on:
         description: 'رمز عبور برای فایل ZIP'
         required: true
         type: string
+      custom_folder:
+        description: 'نام دلخواه برای پوشه (اختیاری - خالی بذارید خودکار ساخته بشه)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -28,23 +33,84 @@ jobs:
       - name: نصب 7z
         run: sudo apt-get update && sudo apt-get install -y p7zip-full
 
+      - name: ایجاد شناسه یکتا برای پوشه
+        id: folder
+        run: |
+          if [ -n "${{ github.event.inputs.custom_folder }}" ]; then
+            # اگر کاربر نام دلخواه وارد کرده
+            FOLDER_NAME="downloads/${{ github.event.inputs.custom_folder }}"
+          else
+            # ساخت نام خودکار با تاریخ و شماره اجرا
+            TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+            RUN_ID=${{ github.run_number }}
+            FOLDER_NAME="downloads/download_${TIMESTAMP}_${RUN_ID}"
+          fi
+          
+          echo "FOLDER_NAME=$FOLDER_NAME" >> $GITHUB_ENV
+          echo "📁 پوشه ذخیره‌سازی: $FOLDER_NAME"
+
+      - name: ایجاد پوشه یکتا
+        run: mkdir -p "${{ env.FOLDER_NAME }}"
+
       - name: دانلود فایل از لینک
         run: |
-          curl -L --fail --retry 3 -o downloaded_file "${{ github.event.inputs.file_url }}"
-          ls -lh downloaded_file
+          curl -L --fail --retry 3 -o "${{ env.FOLDER_NAME }}/downloaded_file" "${{ github.event.inputs.file_url }}"
+          ls -lh "${{ env.FOLDER_NAME }}/"
 
-      - name: استخراج نام اصلی فایل (اختیاری)
+      - name: استخراج نام و فرمت فایل
         run: |
-          ORIGINAL_NAME=$(basename "${{ github.event.inputs.file_url }}" | cut -d '?' -f1)
-          [ -z "$ORIGINAL_NAME" ] && ORIGINAL_NAME="downloaded_file"
-          echo "ORIGINAL_NAME=$ORIGINAL_NAME" >> $GITHUB_ENV
+          # استخراج نام فایل از URL
+          FILENAME=$(basename "${{ github.event.inputs.file_url }}" | cut -d '?' -f1)
+          
+          # اگر نام خالی بود یا فاقد فرمت بود
+          if [ -z "$FILENAME" ] || [ "$FILENAME" = "download" ] || [[ ! "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]]; then
+            # تشخیص نوع فایل از روی MIME type
+            MIME_TYPE=$(file --mime-type -b "${{ env.FOLDER_NAME }}/downloaded_file")
+            echo "MIME Type: $MIME_TYPE"
+            
+            case "$MIME_TYPE" in
+              application/zip)               EXT=".zip" ;;
+              application/x-rar)             EXT=".rar" ;;
+              application/x-7z-compressed)   EXT=".7z" ;;
+              application/pdf)               EXT=".pdf" ;;
+              application/x-msdownload)      EXT=".exe" ;;
+              application/vnd.android.package-archive) EXT=".apk" ;;
+              image/jpeg)                    EXT=".jpg" ;;
+              image/png)                     EXT=".png" ;;
+              image/gif)                     EXT=".gif" ;;
+              video/mp4)                     EXT=".mp4" ;;
+              audio/mpeg)                    EXT=".mp3" ;;
+              text/html)                     EXT=".html" ;;
+              application/json)              EXT=".json" ;;
+              application/xml)               EXT=".xml" ;;
+              application/x-gzip)            EXT=".tar.gz" ;;
+              application/x-bzip2)           EXT=".tar.bz2" ;;
+              *)                             EXT="" ;;
+            esac
+            
+            if [ -z "$FILENAME" ] || [ "$FILENAME" = "download" ]; then
+              FILENAME="downloaded_file${EXT}"
+            else
+              FILENAME="${FILENAME}${EXT}"
+            fi
+          fi
+          
+          # تغییر نام فایل دانلود شده به نام اصلی
+          mv "${{ env.FOLDER_NAME }}/downloaded_file" "${{ env.FOLDER_NAME }}/${FILENAME}"
+          
+          echo "ORIGINAL_NAME=${FILENAME}" >> $GITHUB_ENV
+          echo "✅ نام فایل نهایی: ${FILENAME}"
 
       - name: ساخت آرشیو رمزدار چندتکه (هر تکه ۹۵ مگابایت)
         run: |
-          7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=3 -v95m "archive.7z" downloaded_file
+          cd "${{ env.FOLDER_NAME }}"
+          7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=3 -v95m "archive.7z" "${{ env.ORIGINAL_NAME }}"
+          cd ../..
 
-      - name: حذف فایل اصلی
-        run: rm -f downloaded_file
+      - name: نمایش ساختار پوشه
+        run: |
+          echo "📂 محتویات پوشه ${{ env.FOLDER_NAME }}:"
+          ls -lh "${{ env.FOLDER_NAME }}/"
 
       - name: Commit و Push مرحله‌ای تکه‌ها (هر بار ۱۰ تکه)
         run: |
@@ -52,8 +118,15 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           # لیست تمام تکه‌ها
-          chunks=(archive.7z.*)
+          chunks=(${{ env.FOLDER_NAME }}/archive.7z.*)
           total=${#chunks[@]}
+          
+          if [ $total -eq 0 ]; then
+            echo "❌ هیچ تکه‌ای پیدا نشد!"
+            exit 1
+          fi
+          
+          echo "📦 تعداد کل تکه‌ها: $total"
           batch_size=10  # هر بار ۱۰ تکه
           start=0
           
@@ -61,7 +134,7 @@ jobs:
             end=$((start + batch_size - 1))
             [ $end -ge $total ] && end=$((total - 1))
             
-            echo "Pushing chunks $start to $end ..."
+            echo "📤 در حال Push تکه‌های $((start+1)) تا $((end+1)) از $total ..."
             
             # افزودن تکه‌های این بسته
             for i in $(seq $start $end); do
@@ -69,15 +142,15 @@ jobs:
             done
             
             # commit (با پیام حاوی محدوده)
-            git commit -m "Add chunks $((start+1))-$((end+1)) of $total"
+            git commit -m "📦 [${{ env.FOLDER_NAME }}] Add chunks $((start+1))-$((end+1)) of $total"
             
             # push با حداکثر تلاش ۵ بار
             for attempt in {1..5}; do
               if git push; then
-                echo "Push successful"
+                echo "✅ Push موفقیت‌آمیز بود"
                 break
               else
-                echo "Push failed (attempt $attempt), retrying in 10 seconds..."
+                echo "⚠️ Push ناموفق (تلاش $attempt)، ۱۰ ثانیه صبر... "
                 sleep 10
               fi
             done
@@ -86,3 +159,34 @@ jobs:
             # کمی صبر بین بسته‌ها
             sleep 5
           done
+          
+          echo "🎉 تمام تکه‌ها با موفقیت در ${{ env.FOLDER_NAME }} ذخیره شدند!"
+
+      - name: ایجاد فایل راهنما (Readme)
+        run: |
+          cat > "${{ env.FOLDER_NAME }}/README.md" << EOF
+          # اطلاعات فایل دانلود شده
+          
+          - 📅 **تاریخ دانلود:** $(date +'%Y-%m-%d %H:%M:%S')
+          - 📁 **نام فایل اصلی:** ${{ env.ORIGINAL_NAME }}
+          - 🔢 **شماره اجرا:** ${{ github.run_number }}
+          - 🔗 **لینک دانلود:** ${{ github.event.inputs.file_url }}
+          - 🔑 **رمز فایل:** با رمزی که وارد کردید
+          
+          ## نحوه استخراج
+          ۱. تمام تکه‌ها را دانلود کنید
+          ۲. از نرم‌افزار 7-Zip استفاده کنید
+          ۳. فایل \`archive.7z.001\` را باز کنید
+          ۴. رمز عبور را وارد کنید
+          EOF
+          
+          git add "${{ env.FOLDER_NAME }}/README.md"
+          git commit -m "📝 Add README for ${{ env.FOLDER_NAME }}"
+          git push
+
+      - name: نمایش مسیر نهایی
+        run: |
+          echo "========================================="
+          echo "🎯 فایل‌ها با موفقیت در مسیر زیر ذخیره شدند:"
+          echo "   ${{ env.FOLDER_NAME }}/"
+          echo "========================================="
