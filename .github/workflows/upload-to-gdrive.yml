@@ -1,28 +1,19 @@
-name: آپلود فایل‌ها به Google Drive
+name: آپلود کل پوشه downloads به Google Drive
 
 on:
   workflow_dispatch:
     inputs:
-      source_folder:
-        description: 'مسیر پوشه فایل‌های دانلود شده (مثلاً: downloads/batch_20260428_210300_11)'
-        required: true
-        type: string
       zip_name:
-        description: 'نام فایل ZIP در گوگل درایو (اختیاری)'
+        description: 'نام فایل ZIP در گوگل درایو (اختیاری - خالی بذارید از تاریخ استفاده بشه)'
         required: false
         type: string
         default: ''
-      overwrite:
-        description: 'بازنویسی فایل موجود؟'
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   contents: read
 
 jobs:
-  upload-to-gdrive:
+  upload-all-to-gdrive:
     runs-on: ubuntu-latest
 
     steps:
@@ -31,41 +22,43 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: بررسی وجود پوشه
+      - name: بررسی وجود پوشه downloads
         run: |
-          if [ ! -d "${{ github.event.inputs.source_folder }}" ]; then
-            echo "❌ پوشه ${{ github.event.inputs.source_folder }} پیدا نشد!"
-            echo ""
-            echo "پوشه‌های موجود در downloads/:"
-            ls -d downloads/*/ 2>/dev/null || echo "  (هیچ پوشه‌ای نیست)"
+          if [ ! -d "downloads" ]; then
+            echo "❌ پوشه downloads پیدا نشد!"
             exit 1
           fi
           
-          echo "✅ پوشه پیدا شد: ${{ github.event.inputs.source_folder }}"
+          echo "📂 محتویات پوشه downloads:"
+          ls -lh downloads/
           echo ""
-          echo "📂 محتویات پوشه:"
-          ls -lh "${{ github.event.inputs.source_folder }}/"
-
-      - name: ساخت فایل ZIP
-        run: |
-          SOURCE="${{ github.event.inputs.source_folder }}"
           
-          # تعیین نام فایل ZIP
+          # شمارش فایل‌ها و پوشه‌ها
+          FILE_COUNT=$(find downloads -type f | wc -l)
+          FOLDER_COUNT=$(find downloads -mindepth 1 -maxdepth 1 -type d | wc -l)
+          TOTAL_SIZE=$(du -sh downloads | cut -f1)
+          
+          echo "📊 آمار:"
+          echo "   پوشه‌ها: $FOLDER_COUNT"
+          echo "   فایل‌ها: $FILE_COUNT"
+          echo "   حجم کل: $TOTAL_SIZE"
+
+      - name: ساخت فایل ZIP از کل پوشه downloads
+        run: |
+          # تعیین نام فایل
           if [ -n "${{ github.event.inputs.zip_name }}" ]; then
             ZIP_NAME="${{ github.event.inputs.zip_name }}.zip"
           else
-            FOLDER_NAME=$(basename "$SOURCE")
-            ZIP_NAME="${FOLDER_NAME}.zip"
+            TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+            ZIP_NAME="downloads_backup_${TIMESTAMP}.zip"
           fi
           
-          echo "📦 در حال فشرده‌سازی $SOURCE به $ZIP_NAME ..."
-          
-          cd "$SOURCE"
-          zip -r "../../${ZIP_NAME}" . > /dev/null
-          cd ../..
+          echo "📦 در حال فشرده‌سازی کل پوشه downloads..."
+          zip -r "${ZIP_NAME}" downloads/ > /dev/null
           
           ZIP_SIZE=$(du -h "$ZIP_NAME" | cut -f1)
-          echo "✅ فایل ZIP ساخته شد: $ZIP_NAME (حجم: $ZIP_SIZE)"
+          echo "✅ فایل ZIP ساخته شد: $ZIP_NAME"
+          echo "📏 حجم: $ZIP_SIZE"
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: آپلود به Google Drive
@@ -76,13 +69,13 @@ jobs:
           folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
           credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
           encoded: true
-          overwrite: ${{ github.event.inputs.overwrite }}
+          overwrite: true
 
       - name: گزارش نهایی
         run: |
           echo ""
           echo "═════════════════════════════════════════════"
-          echo "🎉 آپلود با موفقیت انجام شد!"
+          echo "🎉 کل پوشه downloads با موفقیت آپلود شد!"
           echo "📁 فایل: ${{ env.ZIP_NAME }}"
-          echo "📂 پوشه مقصد: Google Drive (Folder ID: ${GDRIVE_FOLDER_ID:0:10}...)"
+          echo "☁️  مقصد: Google Drive"
           echo "═════════════════════════════════════════════"
