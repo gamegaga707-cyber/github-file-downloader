@@ -1,4 +1,4 @@
-name: دانلود چند فایل (سرعت بالا + اسم درست) - Curl Version
+name: دانلود چند فایل (سرعت بالا + اسم درست)
 
 on:
   workflow_dispatch:
@@ -39,7 +39,7 @@ jobs:
 
       - name: نصب پیش‌نیازها
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full parallel
+          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full aria2 parallel
 
       - name: ایجاد پوشه اصلی
         run: |
@@ -53,7 +53,7 @@ jobs:
           echo "MAIN_FOLDER=$MAIN_FOLDER" >> $GITHUB_ENV
           echo "📁 پوشه: $MAIN_FOLDER"
 
-      - name: دانلود و پردازش (Curl + GNU Parallel)
+      - name: دانلود و پردازش (سرعت بالا با aria2)
         run: |
           DELIMITER="${{ github.event.inputs.delimiter }}"
           IFS="$DELIMITER" read -ra urls <<< "${{ github.event.inputs.file_urls }}"
@@ -68,10 +68,11 @@ jobs:
           total_urls=${#clean_urls[@]}
           echo "📊 تعداد لینک: $total_urls"
           
-          # ایجاد فایل job برای GNU Parallel
-          JOB_FILE="/tmp/download_jobs.txt"
-          > "$JOB_FILE"
-          > "/tmp/url_names.txt"
+          # ایجاد فایل ورودی برای aria2 با نام‌های اختصاصی
+          ARIA2_INPUT="/tmp/aria2_urls.txt"
+          > "$ARIA2_INPUT"
+          
+          declare -A url_to_name
           
           for i in "${!clean_urls[@]}"; do
             url="${clean_urls[$i]}"
@@ -90,81 +91,52 @@ jobs:
             # اگر نام معتبر نبود، نام پیش‌فرض
             if [ -z "$FILENAME" ] || [ ${#FILENAME} -lt 3 ] || [ ${#FILENAME} -gt 100 ]; then
               EXT="${RAW_FILENAME##*.}"
-              [ -z "$EXT" ] && EXT="bin"
               FILENAME="file_$(printf "%03d" $current).${EXT}"
             fi
             
-            # ذخیره mapping
-            echo "${current}|${FILENAME}|${url}" >> "/tmp/url_names.txt"
+            # جلوگیری از نام‌های تکراری
+            if [ -f "${{ env.MAIN_FOLDER }}/${FILENAME}" ] || [ "${url_to_name[$FILENAME]}" ]; then
+              BASE="${FILENAME%.*}"
+              EXT="${FILENAME##*.}"
+              FILENAME="${BASE}_$(printf "%03d" $current).${EXT}"
+            fi
             
-            # ایجاد دستور curl برای parallel
-            cat >> "$JOB_FILE" << 'CURLCMD'
-echo "📥 [JOB_ID] START $FILENAME"
-curl -L --fail \
-     --retry 5 \
-     --retry-delay 3 \
-     --retry-max-time 60 \
-     --connect-timeout 15 \
-     --max-time 900 \
-     --speed-limit 1024 \
-     --speed-time 15 \
-     -o "$DOWNLOAD_DIR/$FILENAME" \
-     "$URL" 2>"$DOWNLOAD_DIR/.err_${FILENAME}" && \
-echo "📥 [JOB_ID] DONE $FILENAME" || \
-echo "📥 [JOB_ID] FAIL $FILENAME"
-CURLCMD
-            
+            url_to_name[$FILENAME]=1
+            echo "$url" >> "$ARIA2_INPUT"
+            echo "  out=$FILENAME" >> "$ARIA2_INPUT"
+            echo "📥 [$current/$total_urls] $FILENAME"
           done
           
-          echo "🚀 شروع دانلود موازی با GNU Parallel (همه ${total_urls} فایل همزمان)..."
+          echo "🚀 شروع دانلود موازی با aria2 (اتصالات همزمان)..."
           
-          # اجرای دانلودهای موازی با export متغیرها
-          export DOWNLOAD_DIR="${{ env.MAIN_FOLDER }}"
+          # دانلود با aria2 - بهینه‌سازی شده برای سرعت
+          aria2c \
+            --input-file="$ARIA2_INPUT" \
+            --dir="${{ env.MAIN_FOLDER }}" \
+            --max-concurrent-downloads="$total_urls" \
+            --max-connection-per-server=8 \
+            --split=8 \
+            --min-split-size=1M \
+            --max-tries=5 \
+            --retry-wait=3 \
+            --timeout=30 \
+            --connect-timeout=10 \
+            --allow-overwrite=false \
+            --auto-file-renaming=false \
+            --file-allocation=none \
+            --console-log-level=notice \
+            --summary-interval=0
           
-          # خوندن job file و اجرا با parallel
-          parallel --jobs "$total_urls" \
-                   --joblog "/tmp/parallel_log.txt" \
-                   --line-buffer \
-                   --tagstring '{%.}' \
-                   --colsep '\|' \
-                   'JOB_ID={1}; FILENAME={2}; URL={3}; '"$(cat "$JOB_FILE")" \
-                   :::: "/tmp/url_names.txt"
-          
-          echo ""
           echo "✅ همه دانلودها تموم شد!"
-          
-          # نمایش خلاصه خطاها
-          if ls "$DOWNLOAD_DIR"/.err_* 1> /dev/null 2>&1; then
-            echo ""
-            echo "📋 خطاهای دانلود:"
-            for err_file in "$DOWNLOAD_DIR"/.err_*; do
-              if [ -s "$err_file" ]; then
-                fname=$(echo "$err_file" | sed 's/.*\.err_//')
-                echo "  ❌ $fname: $(cat "$err_file" | head -1)"
-              fi
-            done
-          fi
-          
-          # پاکسازی فایل‌های خطا
-          rm -f "$DOWNLOAD_DIR"/.err_*
           
           cd "${{ env.MAIN_FOLDER }}"
           
-          # بررسی فایل‌های دانلود شده
-          declare -A url_to_name
+          # پردازش فایل‌های دانلود شده
           success=0
           fail=0
           file_index=0
           
-          # مرتب‌سازی فایل‌ها بر اساس زمان ایجاد برای حفظ ترتیب
-          mapfile -t files < <(ls -1t -- *.mp4 *.mkv *.avi *.mov *.webm *.flv *.mp3 *.m4a *.jpg *.png *.gif *.pdf *.zip *.rar *.7z *.bin 2>/dev/null)
-          
-          # اگر فایلی با pattern بالا پیدا نشد، همه فایل‌ها رو بررسی کن
-          if [ ${#files[@]} -eq 0 ]; then
-            mapfile -t files < <(find . -maxdepth 1 -type f ! -name '.*' | sed 's|^\./||' | sort)
-          fi
-          
-          for FILENAME in "${files[@]}"; do
+          for FILENAME in *; do
             [ ! -f "$FILENAME" ] && continue
             file_index=$((file_index + 1))
             
@@ -179,54 +151,43 @@ CURLCMD
             
             echo "✅ $FILENAME ($(numfmt --to=iec $FILE_SIZE 2>/dev/null || echo $FILE_SIZE))"
             
-            # تشخیص نوع فایل و اصلاح پسوند فقط اگر نیاز باشه
-            if [[ "$FILENAME" =~ \.bin$ ]]; then
-              MIME=$(file --mime-type -b "$FILENAME" 2>/dev/null)
-              
-              NEW_EXT=""
-              case "$MIME" in
-                video/mp4)             NEW_EXT=".mp4" ;;
-                video/x-matroska)      NEW_EXT=".mkv" ;;
-                video/webm)            NEW_EXT=".webm" ;;
-                video/x-msvideo)       NEW_EXT=".avi" ;;
-                video/quicktime)       NEW_EXT=".mov" ;;
-                video/x-flv)           NEW_EXT=".flv" ;;
-                audio/mpeg)            NEW_EXT=".mp3" ;;
-                audio/mp4|audio/x-m4a) NEW_EXT=".m4a" ;;
-                image/jpeg)            NEW_EXT=".jpg" ;;
-                image/png)             NEW_EXT=".png" ;;
-                image/gif)             NEW_EXT=".gif" ;;
-                application/pdf)       NEW_EXT=".pdf" ;;
-                application/zip)       NEW_EXT=".zip" ;;
-                application/x-rar)     NEW_EXT=".rar" ;;
-                application/x-7z-compressed) NEW_EXT=".7z" ;;
-              esac
-              
-              if [ -n "$NEW_EXT" ]; then
-                mv "$FILENAME" "${FILENAME%.bin}${NEW_EXT}" 2>/dev/null
-                FILENAME="${FILENAME%.bin}${NEW_EXT}"
-              fi
+            # تشخیص نوع فایل و اصلاح پسوند
+            MIME=$(file --mime-type -b "$FILENAME" 2>/dev/null)
+            
+            EXT=""
+            case "$MIME" in
+              video/mp4)             EXT=".mp4" ;;
+              video/x-matroska)      EXT=".mkv" ;;
+              video/webm)            EXT=".webm" ;;
+              video/x-msvideo)       EXT=".avi" ;;
+              video/quicktime)       EXT=".mov" ;;
+              video/x-flv)           EXT=".flv" ;;
+              audio/mpeg)            EXT=".mp3" ;;
+              audio/mp4|audio/x-m4a) EXT=".m4a" ;;
+              image/jpeg)            EXT=".jpg" ;;
+              image/png)             EXT=".png" ;;
+              image/gif)             EXT=".gif" ;;
+              application/pdf)       EXT=".pdf" ;;
+              application/zip)       EXT=".zip" ;;
+              application/x-rar)     EXT=".rar" ;;
+              application/x-7z-compressed) EXT=".7z" ;;
+            esac
+            
+            if [ -n "$EXT" ] && [[ ! "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]]; then
+              mv "$FILENAME" "${FILENAME}${EXT}" 2>/dev/null
+              FILENAME="${FILENAME}${EXT}"
             fi
             
-            # فشرده‌سازی با 7z (سریعترین حالت -mx=0)
+            # فشرده‌سازی با 7z
             ARCHIVE_NAME=$(printf "file_%03d" $file_index)
             
-            # استفاده از parallel برای فشرده‌سازی اگر فایل حجیم باشه
-            if [ "$FILE_SIZE" -gt 104857600 ]; then  # بزرگتر از 100MB
-              echo "  ⏳ فشرده‌سازی فایل بزرگ ($(numfmt --to=iec $FILE_SIZE))..."
-            fi
-            
             if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=0 -v95m \
-                 -mmt=on \
                  "${ARCHIVE_NAME}.7z" "$FILENAME" > /dev/null 2>&1; then
-              
-              # شمارش تکه‌ها
-              chunk_count=$(ls "${ARCHIVE_NAME}.7z."* 2>/dev/null | wc -l)
-              echo "  🗜️ ${ARCHIVE_NAME}.7z (${chunk_count} تکه، حاوی: $FILENAME)"
+              echo "  🗜️ ${ARCHIVE_NAME}.7z.* (حاوی: $FILENAME)"
               rm -f "$FILENAME"
               success=$((success + 1))
             else
-              echo "  ❌ خطای فشرده‌سازی $FILENAME"
+              echo "  ❌ خطای فشرده‌سازی"
               fail=$((fail + 1))
             fi
           done
@@ -235,21 +196,9 @@ CURLCMD
           
           echo ""
           echo "═════════════════════════════════════════════"
-          echo "📊 خلاصه نهایی:"
-          echo "   کل: $total_urls"
-          echo "   ✅ موفق: $success"
-          echo "   ❌ ناموفق: $fail"
-          
-          # نمایش آمار دانلود از parallel log
-          if [ -f "/tmp/parallel_log.txt" ]; then
-            echo ""
-            echo "⏱️ آمار زمان دانلود:"
-            tail -n +2 "/tmp/parallel_log.txt" | awk -F'\t' '{
-              if ($7 != "") printf "   %s: %s ثانیه\n", $9, $7
-            }'
-          fi
+          echo "📊 نهایی: کل=$total_urls | ✅$success | ❌$fail"
 
-      - name: commit و push (بهینه‌شده با batch)
+      - name: commit و push (بهینه‌شده)
         run: |
           git sparse-checkout disable
           git config user.name "github-actions[bot]"
@@ -257,21 +206,20 @@ CURLCMD
           
           cd "${{ env.MAIN_FOLDER }}"
           
-          # پیدا کردن همه تکه‌های 7z
+          # پیدا کردن همه تکه‌ها
           chunks=()
-          while IFS= read -r -d '' file; do
-            chunks+=("$file")
-          done < <(find . -maxdepth 1 -name "*.7z.*" -print0 | sort -z)
+          for f in *.7z.*; do
+            [ -f "$f" ] && chunks+=("$f")
+          done
           
           total=${#chunks[@]}
           
           if [ $total -eq 0 ]; then
-            echo "❌ هیچ تکه‌ای برای آپلود وجود ندارد!"
+            echo "❌ تکه‌ای نیست!"
             exit 1
           fi
           
-          echo "📦 مجموع تکه‌ها: $total"
-          echo "🚀 شروع commit و push دسته‌ای..."
+          echo "📦 $total تکه پیدا شد"
           
           BATCH=15
           start=0
@@ -280,40 +228,23 @@ CURLCMD
             end=$((start + BATCH - 1))
             [ $end -ge $total ] && end=$((total - 1))
             
-            batch_size=$((end - start + 1))
-            echo ""
-            echo "📤 آپلود دسته $((start+1)) تا $((end+1)) از $total ($batch_size فایل)"
+            echo "📤 Batch [$((start+1))-$((end+1))] از $total"
             
-            # اضافه کردن فایل‌های این دسته
             for i in $(seq $start $end); do
               git add "${chunks[$i]}"
             done
             
-            git commit -m "📦 دسته $((start+1))-$((end+1)) از $total [${{ env.MAIN_FOLDER }}]"
+            git commit -m "📦 $((start+1))-$((end+1))/$total [${{ env.MAIN_FOLDER }}]"
             
-            # تلاش برای push با retry هوشمند
-            push_success=false
+            # تلاش برای push با retry
             for retry in 1 2 3; do
-              echo "   تلاش $retry برای push..."
-              if git pull --rebase --quiet 2>/dev/null && \
-                 git push --quiet 2>/dev/null; then
-                echo "   ✅ push موفق"
-                push_success=true
+              if git pull --rebase 2>/dev/null && git push 2>/dev/null; then
                 break
               fi
-              echo "   ⚠️ push ناموفق، صبر $(($retry * 5)) ثانیه..."
-              sleep $(($retry * 5))
+              sleep $(($retry * 3))
             done
-            
-            if [ "$push_success" = false ]; then
-              echo "❌ خطا در push بعد از ۳ تلاش!"
-              exit 1
-            fi
             
             start=$((end + 1))
           done
           
-          echo ""
-          echo "═════════════════════════════════════════════"
-          echo "🎉 عملیات با موفقیت به پایان رسید!"
-          echo "📊 کل تکه‌های آپلود شده: $total"
+          echo "🎉 تموم!"
