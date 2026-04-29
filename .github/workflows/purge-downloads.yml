@@ -1,4 +1,4 @@
-name: پاکسازی پوشه downloads
+name: بازسازی و پاکسازی پوشه downloads
 
 on:
   workflow_dispatch:
@@ -7,30 +7,27 @@ permissions:
   contents: write
 
 jobs:
-  clean-downloads:
+  fix-downloads:
     runs-on: ubuntu-latest
 
     steps:
       - name: دریافت کل ریپازیتوری
         uses: actions/checkout@v4
 
-      - name: پاک کردن محتویات downloads
+      - name: بازسازی پوشه downloads
         run: |
-          if [ -d "downloads" ]; then
-            echo "🧹 در حال پاکسازی پوشه downloads..."
-            rm -rf downloads/*
-            echo "✅ محتویات پوشه downloads پاک شد"
-          else
-            echo "⚠️ پوشه downloads وجود نداره"
-          fi
+          # پوشه رو با یه فایل .gitkeep بساز
+          mkdir -p downloads
+          touch downloads/.gitkeep
+          echo "✅ پوشه downloads با فایل .gitkeep ساخته شد"
 
-      - name: Commit و Push تغییرات
+      - name: Commit و Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           git add downloads/
-          git commit -m "🧹 پاکسازی پوشه downloads"
+          git commit -m "📁 بازسازی پوشه downloads"
           git push
           
-          echo "🎉 پوشه downloads با موفقیت خالی شد!"
+          echo "🎉 پوشه downloads برگشت!"
