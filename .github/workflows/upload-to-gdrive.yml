@@ -37,8 +37,8 @@ jobs:
           echo "✅ فایل ZIP: $ZIP_NAME ($ZIP_SIZE)"
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: آپلود به Google Drive (action جدید)
-        uses: adityak74/google-drive-upload-action@main
+      - name: آپلود به Google Drive
+        uses: adityak74/google-drive-upload-git-action@main
         with:
           credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
           filename: ${{ env.ZIP_NAME }}
