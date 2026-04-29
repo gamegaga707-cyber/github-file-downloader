@@ -1,4 +1,4 @@
-name: تست آپلود - فقط batch_20260428_202253_7
+name: تست آپلود - با action جدید
 
 on:
   workflow_dispatch:
@@ -22,39 +22,28 @@ jobs:
         run: |
           echo "========== محتویات پوشه =========="
           ls -lhR downloads/batch_20260428_202253_7/
-          
           TOTAL_SIZE=$(du -sh downloads/batch_20260428_202253_7/ | cut -f1)
-          FILE_COUNT=$(find downloads/batch_20260428_202253_7/ -type f | wc -l)
-          
-          echo ""
           echo "📊 حجم: $TOTAL_SIZE"
-          echo "📊 تعداد فایل: $FILE_COUNT"
 
       - name: ساخت ZIP
         run: |
           TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
-          ZIP_NAME="test_batch_202253_7_${TIMESTAMP}.zip"
+          ZIP_NAME="test_new_action_${TIMESTAMP}.zip"
           
           echo "📦 در حال فشرده‌سازی..."
           zip -r "${ZIP_NAME}" downloads/batch_20260428_202253_7/ > /dev/null 2>&1
           
           ZIP_SIZE=$(du -h "$ZIP_NAME" | cut -f1)
-          ZIP_SIZE_BYTES=$(stat -c%s "$ZIP_NAME")
-          
-          echo "✅ فایل ZIP: $ZIP_NAME"
-          echo "📏 حجم: $ZIP_SIZE ($ZIP_SIZE_BYTES بایت)"
-          
+          echo "✅ فایل ZIP: $ZIP_NAME ($ZIP_SIZE)"
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
-          echo "ZIP_SIZE_BYTES=$ZIP_SIZE_BYTES" >> $GITHUB_ENV
 
-      - name: آپلود به Google Drive
-        uses: mathisve/gdrive-upload-action@main
+      - name: آپلود به Google Drive (action جدید)
+        uses: adityak74/google-drive-upload-action@main
         with:
-          filename: ${{ env.ZIP_NAME }}
-          name: ${{ env.ZIP_NAME }}
-          folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
           credentials: ${{ secrets.GDRIVE_CREDENTIALS }}
-          encoded: true
+          filename: ${{ env.ZIP_NAME }}
+          folderId: ${{ secrets.GDRIVE_FOLDER_ID }}
+          name: ${{ env.ZIP_NAME }}
           overwrite: true
 
       - name: گزارش نهایی
@@ -63,6 +52,5 @@ jobs:
           echo "═════════════════════════════════════════════"
           echo "🎉 تست آپلود انجام شد!"
           echo "📁 فایل: ${{ env.ZIP_NAME }}"
-          echo "📏 حجم: $(du -h ${{ env.ZIP_NAME }} | cut -f1)"
           echo "☁️  مقصد: Google Drive"
           echo "═════════════════════════════════════════════"
