@@ -80,11 +80,9 @@ jobs:
             current=$((i + 1))
             
             # استخراج اسم فایل از URL
-            # برای لینک‌های Thunder مثل: /AgAD_R9/1e6b2394bf...mp4
             RAW_FILENAME=$(echo "$url" | grep -oP '[^/]+\.(mp4|mkv|avi|mov|webm|flv|mp3|m4a|jpg|png|gif|pdf|zip|rar|7z)(\?.*)?$' | cut -d '?' -f1)
             
             if [ -z "$RAW_FILENAME" ]; then
-              # اگه اسم فایل از URL درنیومد، از URL decode استفاده کن
               RAW_FILENAME=$(basename "$url" | cut -d '?' -f1 | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))" 2>/dev/null || basename "$url" | cut -d '?' -f1)
             fi
             
@@ -115,7 +113,10 @@ jobs:
           # ====== مرحله ۲: بررسی و فشرده‌سازی ======
           cd "${{ env.MAIN_FOLDER }}"
           
+          file_index=0
           for FILENAME in "${dl_files[@]}"; do
+            file_index=$((file_index + 1))
+            
             if [ ! -f "$FILENAME" ]; then
               echo "❌ $FILENAME دانلود نشد!"
               fail=$((fail + 1))
@@ -157,13 +158,13 @@ jobs:
               FILENAME="${FILENAME}${EXT}"
             fi
             
-            # اسم فایل فشرده (بدون پسوند)
-            BASENAME="${FILENAME%.*}"
+            # اسم ساده برای فایل فشرده: file_01, file_02, ...
+            ARCHIVE_NAME=$(printf "file_%02d" $file_index)
             
-            # فشرده‌سازی سریع
+            # فشرده‌سازی سریع (فایل داخلش اسم اصلی رو حفظ می‌کنه)
             if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=0 -v95m \
-                 "${BASENAME}.7z" "$FILENAME" > /dev/null 2>&1; then
-              echo "  🗜️ ${BASENAME}.7z.xxx"
+                 "${ARCHIVE_NAME}.7z" "$FILENAME" > /dev/null 2>&1; then
+              echo "  🗜️ ${ARCHIVE_NAME}.7z.xxx (حاوی: $FILENAME)"
               rm -f "$FILENAME"
               success=$((success + 1))
             else
