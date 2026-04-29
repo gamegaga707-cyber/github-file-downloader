@@ -1,4 +1,4 @@
-name: دانلود چند فایل (بهینه و سریع)
+name: دانلود چند فایل (سرعت بالا + اسم درست)
 
 on:
   workflow_dispatch:
@@ -51,7 +51,7 @@ jobs:
           echo "MAIN_FOLDER=$MAIN_FOLDER" >> $GITHUB_ENV
           echo "📁 پوشه: $MAIN_FOLDER"
 
-      - name: دانلود و پردازش (بهینه‌شده)
+      - name: دانلود و پردازش (سرعت بالا)
         run: |
           DELIMITER="${{ github.event.inputs.delimiter }}"
           IFS="$DELIMITER" read -ra urls <<< "${{ github.event.inputs.file_urls }}"
@@ -69,107 +69,110 @@ jobs:
           success=0
           fail=0
           
+          # آرایه برای نگهداری اسم فایل‌ها
+          declare -a dl_files
+          
+          # ====== مرحله ۱: دانلود همه فایل‌ها به صورت موازی ======
+          echo "🚀 شروع دانلود موازی $total_urls فایل..."
+          
           for i in "${!clean_urls[@]}"; do
             url="${clean_urls[$i]}"
             current=$((i + 1))
             
-            echo ""
-            echo "═════════════════════════════════════════════"
-            echo "📥 [$current/$total_urls] ${url:0:80}..."
-            echo "═════════════════════════════════════════════"
+            # استخراج اسم فایل از URL
+            # برای لینک‌های Thunder مثل: /AgAD_R9/1e6b2394bf...mp4
+            RAW_FILENAME=$(echo "$url" | grep -oP '[^/]+\.(mp4|mkv|avi|mov|webm|flv|mp3|m4a|jpg|png|gif|pdf|zip|rar|7z)(\?.*)?$' | cut -d '?' -f1)
             
-            # تلاش برای پیدا کردن اسم واقعی فایل از URL
-            RAW_FILENAME=$(basename "$url" | cut -d '?' -f1 | sed 's/[^a-zA-Z0-9._-]/_/g')
-            
-            # اگر اسم فایل معنی‌دار بود (کمتر از ۶۰ کاراکتر و پسوند داشت)
-            if [ -n "$RAW_FILENAME" ] && [ ${#RAW_FILENAME} -lt 60 ] && [[ "$RAW_FILENAME" =~ \.[a-zA-Z0-9]+$ ]]; then
-              FILENAME="$RAW_FILENAME"
-              echo "📎 اسم اصلی: $FILENAME"
-            else
-              # برای لینک‌های طولانی، اسم ساده بذار
-              FILENAME=$(printf "file_%02d" $current)
-              echo "📎 اسم ساده: $FILENAME"
+            if [ -z "$RAW_FILENAME" ]; then
+              # اگه اسم فایل از URL درنیومد، از URL decode استفاده کن
+              RAW_FILENAME=$(basename "$url" | cut -d '?' -f1 | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))" 2>/dev/null || basename "$url" | cut -d '?' -f1)
             fi
             
-            # حذف پسوند برای اسم فایل فشرده
+            # حذف کاراکترهای غیرمجاز
+            FILENAME=$(echo "$RAW_FILENAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
+            
+            # اگه اسم معنی‌دار نبود، اسم ساده بذار
+            if [ -z "$FILENAME" ] || [ ${#FILENAME} -lt 3 ] || [ ${#FILENAME} -gt 80 ]; then
+              FILENAME=$(printf "file_%02d" $current)
+            fi
+            
+            echo "📥 [$current/$total_urls] $FILENAME"
+            
+            # دانلود در پس‌زمینه (همه همزمان)
+            curl -L --fail --retry 3 --retry-delay 3 \
+                 --connect-timeout 20 --max-time 900 \
+                 -o "${{ env.MAIN_FOLDER }}/${FILENAME}" \
+                 "$url" 2>/dev/null &
+            
+            dl_files+=("$FILENAME")
+          done
+          
+          # صبر کن تا همه دانلودها تموم بشن
+          echo "⏳ منتظر اتمام دانلودها..."
+          wait
+          echo "✅ همه دانلودها تموم شد!"
+          
+          # ====== مرحله ۲: بررسی و فشرده‌سازی ======
+          cd "${{ env.MAIN_FOLDER }}"
+          
+          for FILENAME in "${dl_files[@]}"; do
+            if [ ! -f "$FILENAME" ]; then
+              echo "❌ $FILENAME دانلود نشد!"
+              fail=$((fail + 1))
+              continue
+            fi
+            
+            FILE_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || echo 0)
+            
+            if [ "$FILE_SIZE" = "0" ]; then
+              echo "❌ $FILENAME حجم صفر - رد شد"
+              rm -f "$FILENAME"
+              fail=$((fail + 1))
+              continue
+            fi
+            
+            echo "✅ $FILENAME ($(numfmt --to=iec $FILE_SIZE))"
+            
+            # تشخیص فرمت واقعی
+            MIME=$(file --mime-type -b "$FILENAME" 2>/dev/null)
+            EXT=""
+            
+            case "$MIME" in
+              video/mp4)             EXT=".mp4" ;;
+              video/x-matroska)      EXT=".mkv" ;;
+              video/webm)            EXT=".webm" ;;
+              video/x-msvideo)       EXT=".avi" ;;
+              video/quicktime)       EXT=".mov" ;;
+              audio/mpeg)            EXT=".mp3" ;;
+              audio/mp4)             EXT=".m4a" ;;
+              image/jpeg)            EXT=".jpg" ;;
+              image/png)             EXT=".png" ;;
+              application/pdf)       EXT=".pdf" ;;
+              application/zip)       EXT=".zip" ;;
+            esac
+            
+            # اضافه کردن پسوند اگه نداره
+            if [[ ! "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]] && [ -n "$EXT" ]; then
+              mv "$FILENAME" "${FILENAME}${EXT}"
+              FILENAME="${FILENAME}${EXT}"
+            fi
+            
+            # اسم فایل فشرده (بدون پسوند)
             BASENAME="${FILENAME%.*}"
             
-            # دانلود مستقیم با اسم نهایی
-            echo "⬇️ دانلود..."
-            
-            if curl -L --fail --retry 3 --retry-delay 5 \
-                 --connect-timeout 30 --max-time 600 \
-                 -o "${{ env.MAIN_FOLDER }}/${FILENAME}" \
-                 "$url" 2>&1; then
-              
-              FILE_SIZE=$(stat -c%s "${{ env.MAIN_FOLDER }}/${FILENAME}")
-              
-              if [ "$FILE_SIZE" = "0" ]; then
-                echo "❌ حجم صفر - رد شد"
-                rm -f "${{ env.MAIN_FOLDER }}/${FILENAME}"
-                fail=$((fail + 1))
-                continue
-              fi
-              
-              echo "✅ دانلود شد: $(numfmt --to=iec $FILE_SIZE)"
-              
-              # تشخیص فرمت واقعی فایل
-              MIME=$(file --mime-type -b "${{ env.MAIN_FOLDER }}/${FILENAME}")
-              
-              case "$MIME" in
-                video/mp4)             EXT=".mp4" ;;
-                video/x-matroska)      EXT=".mkv" ;;
-                video/webm)            EXT=".webm" ;;
-                video/x-msvideo)       EXT=".avi" ;;
-                video/quicktime)       EXT=".mov" ;;
-                video/x-flv)           EXT=".flv" ;;
-                audio/mpeg)            EXT=".mp3" ;;
-                audio/mp4)             EXT=".m4a" ;;
-                image/jpeg)            EXT=".jpg" ;;
-                image/png)             EXT=".png" ;;
-                image/gif)             EXT=".gif" ;;
-                application/pdf)       EXT=".pdf" ;;
-                application/zip)       EXT=".zip" ;;
-                application/x-rar)     EXT=".rar" ;;
-                application/x-7z-compressed) EXT=".7z" ;;
-                *)                     EXT="" ;;
-              esac
-              
-              # اضافه کردن پسوند واقعی (اگه از قبل نداشت)
-              if [[ "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]]; then
-                # قبلاً پسوند داره
-                FINAL_NAME="$FILENAME"
-              else
-                # پسوند نداره، پسوند واقعی رو اضافه کن
-                FINAL_NAME="${FILENAME}${EXT}"
-                mv "${{ env.MAIN_FOLDER }}/${FILENAME}" "${{ env.MAIN_FOLDER }}/${FINAL_NAME}"
-              fi
-              
-              echo "📄 $FINAL_NAME"
-              
-              # فشرده‌سازی با BASENAME (بدون پسوند)
-              echo "🗜️ فشرده‌سازی..."
-              cd "${{ env.MAIN_FOLDER }}"
-              
-              if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=1 -v95m \
-                   "${BASENAME}.7z" "$FINAL_NAME" > /dev/null 2>&1; then
-                echo "✅ فشرده شد: ${BASENAME}.7z.xxx"
-                rm -f "$FINAL_NAME"
-                success=$((success + 1))
-              else
-                echo "❌ خطای فشرده‌سازی"
-                fail=$((fail + 1))
-              fi
-              
-              cd - > /dev/null
+            # فشرده‌سازی سریع
+            if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=0 -v95m \
+                 "${BASENAME}.7z" "$FILENAME" > /dev/null 2>&1; then
+              echo "  🗜️ ${BASENAME}.7z.xxx"
+              rm -f "$FILENAME"
+              success=$((success + 1))
             else
-              echo "❌ خطای دانلود (کد: $?)"
+              echo "  ❌ خطای فشرده‌سازی"
               fail=$((fail + 1))
             fi
-            
-            echo "📈 [$current/$total_urls] ✅$success ❌$fail"
-            sleep 2
           done
+          
+          cd - > /dev/null
           
           echo ""
           echo "═════════════════════════════════════════════"
@@ -192,7 +195,6 @@ jobs:
           
           echo "📦 $total تکه"
           
-          # هر بار ۱۵ تکه push کن
           BATCH=15
           start=0
           
