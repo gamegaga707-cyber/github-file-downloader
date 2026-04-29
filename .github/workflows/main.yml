@@ -97,7 +97,7 @@ jobs:
             # دانلود با aria2c - نوار پیشرفت زنده
             if aria2c --summary-interval=0 --console-log-level=notice \
                  --allow-overwrite=true --max-tries=5 --retry-wait=5 \
-                 --connect-timeout=20 --timeout=900 \
+                 --connect-timeout=20 --timeout=600 \
                  --dir="${{ env.MAIN_FOLDER }}" --out="$FILENAME" \
                  "$url" 2>&1; then
               
