@@ -169,6 +169,7 @@ jobs:
 
       - name: commit و push (بهینه‌شده)
         run: |
+          git sparse-checkout disable
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
