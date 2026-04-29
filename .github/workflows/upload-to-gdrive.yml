@@ -1,100 +1,51 @@
-name: آپلود کل پوشه downloads به Google Drive
+name: تست آپلود - فقط batch_20260428_202253_7
 
 on:
   workflow_dispatch:
-    inputs:
-      zip_name:
-        description: 'نام فایل ZIP در گوگل درایو (اختیاری)'
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: read
 
 jobs:
-  upload-all-to-gdrive:
+  test-upload:
     runs-on: ubuntu-latest
 
     steps:
-      - name: دریافت فقط پوشه downloads
+      - name: دریافت فقط پوشه مورد نظر
         uses: actions/checkout@v4
         with:
           sparse-checkout: |
-            downloads
+            downloads/batch_20260428_202253_7
           sparse-checkout-cone-mode: false
 
-      - name: بررسی وضعیت پوشه downloads
+      - name: بررسی پوشه
         run: |
-          echo "========== اطلاعات پوشه =========="
-          pwd
-          ls -la
+          echo "========== محتویات پوشه =========="
+          ls -lhR downloads/batch_20260428_202253_7/
           
-          if [ ! -d "downloads" ]; then
-            echo "❌ پوشه downloads پیدا نشد!"
-            exit 1
-          fi
+          TOTAL_SIZE=$(du -sh downloads/batch_20260428_202253_7/ | cut -f1)
+          FILE_COUNT=$(find downloads/batch_20260428_202253_7/ -type f | wc -l)
           
           echo ""
-          echo "========== محتویات downloads =========="
-          ls -lhR downloads/
-          
-          echo ""
-          echo "========== آمار =========="
-          FOLDER_COUNT=$(find downloads -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
-          FILE_COUNT=$(find downloads -type f 2>/dev/null | wc -l)
-          TOTAL_SIZE=$(du -sh downloads 2>/dev/null | cut -f1)
-          
-          echo "پوشه‌ها: $FOLDER_COUNT"
-          echo "فایل‌ها: $FILE_COUNT"
-          echo "حجم کل: $TOTAL_SIZE"
-          
-          if [ "$FILE_COUNT" = "0" ]; then
-            echo ""
-            echo "❌ پوشه downloads خالیه! اول workflow دانلود رو اجرا کن."
-            exit 1
-          fi
+          echo "📊 حجم: $TOTAL_SIZE"
+          echo "📊 تعداد فایل: $FILE_COUNT"
 
-      - name: ساخت فایل ZIP
+      - name: ساخت ZIP
         run: |
-          # تعیین نام
-          if [ -n "${{ github.event.inputs.zip_name }}" ]; then
-            ZIP_NAME="${{ github.event.inputs.zip_name }}.zip"
-          else
-            TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
-            ZIP_NAME="downloads_backup_${TIMESTAMP}.zip"
-          fi
+          TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+          ZIP_NAME="test_batch_202253_7_${TIMESTAMP}.zip"
           
-          echo "📦 نام فایل خروجی: $ZIP_NAME"
-          echo "📂 در حال فشرده‌سازی کل پوشه downloads..."
-          
-          # ساخت ZIP با نمایش فایل‌ها
-          zip -r "${ZIP_NAME}" downloads/
-          
-          # بررسی نتیجه
-          if [ ! -f "${ZIP_NAME}" ]; then
-            echo "❌ فایل ZIP ساخته نشد!"
-            exit 1
-          fi
+          echo "📦 در حال فشرده‌سازی..."
+          zip -r "${ZIP_NAME}" downloads/batch_20260428_202253_7/ > /dev/null 2>&1
           
           ZIP_SIZE=$(du -h "$ZIP_NAME" | cut -f1)
           ZIP_SIZE_BYTES=$(stat -c%s "$ZIP_NAME")
           
-          echo "✅ فایل ZIP ساخته شد"
+          echo "✅ فایل ZIP: $ZIP_NAME"
           echo "📏 حجم: $ZIP_SIZE ($ZIP_SIZE_BYTES بایت)"
           
-          if [ "$ZIP_SIZE_BYTES" = "0" ]; then
-            echo "❌ حجم فایل صفر بایت است!"
-            exit 1
-          fi
-          
-          # نمایش محتویات ZIP
-          echo ""
-          echo "📋 محتویات فایل ZIP:"
-          unzip -l "$ZIP_NAME" | tail -n +4 | head -n -2
-          
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
-          echo "ZIP_PATH=$(pwd)/$ZIP_NAME" >> $GITHUB_ENV
+          echo "ZIP_SIZE_BYTES=$ZIP_SIZE_BYTES" >> $GITHUB_ENV
 
       - name: آپلود به Google Drive
         uses: mathisve/gdrive-upload-action@main
@@ -110,7 +61,8 @@ jobs:
         run: |
           echo ""
           echo "═════════════════════════════════════════════"
-          echo "🎉 آپلود با موفقیت انجام شد!"
+          echo "🎉 تست آپلود انجام شد!"
           echo "📁 فایل: ${{ env.ZIP_NAME }}"
-          echo "☁️  مقصد: Google Drive (Folder ID: مخفی)"
+          echo "📏 حجم: $(du -h ${{ env.ZIP_NAME }} | cut -f1)"
+          echo "☁️  مقصد: Google Drive"
           echo "═════════════════════════════════════════════"
