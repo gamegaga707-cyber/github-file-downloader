@@ -1,0 +1,27 @@
+name: نمایش حجم پوشه downloads
+
+on:
+  workflow_dispatch:
+
+jobs:
+  show-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: محاسبه حجم پوشه
+        run: |
+          echo "📂 حجم پوشه downloads:"
+          du -sh downloads/
+          
+          echo ""
+          echo "📊 حجم هر زیرپوشه:"
+          du -sh downloads/*/
+          
+          echo ""
+          echo "📁 تعداد فایل‌ها:"
+          find downloads -type f | wc -l
+          
+          echo ""
+          echo "📏 تعداد پوشه‌ها:"
+          find downloads -mindepth 1 -maxdepth 1 -type d | wc -l
