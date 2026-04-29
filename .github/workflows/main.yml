@@ -78,7 +78,7 @@ jobs:
             echo "📥 [$current/$total_urls] ${url:0:80}..."
             echo "═════════════════════════════════════════════"
             
-                     # تلاش برای پیدا کردن اسم واقعی فایل از URL
+            # تلاش برای پیدا کردن اسم واقعی فایل از URL
             RAW_FILENAME=$(basename "$url" | cut -d '?' -f1 | sed 's/[^a-zA-Z0-9._-]/_/g')
             
             # اگر اسم فایل معنی‌دار بود (کمتر از ۶۰ کاراکتر و پسوند داشت)
@@ -91,10 +91,10 @@ jobs:
               echo "📎 اسم ساده: $FILENAME"
             fi
             
-            # حذف پسوند برای فشرده‌سازی
+            # حذف پسوند برای اسم فایل فشرده
             BASENAME="${FILENAME%.*}"
             
-            # دانلود مستقیم با اسم نهایی (بدون فایل موقت)
+            # دانلود مستقیم با اسم نهایی
             echo "⬇️ دانلود..."
             
             if curl -L --fail --retry 3 --retry-delay 5 \
@@ -113,7 +113,7 @@ jobs:
               
               echo "✅ دانلود شد: $(numfmt --to=iec $FILE_SIZE)"
               
-              # تشخیص فرمت
+              # تشخیص فرمت واقعی فایل
               MIME=$(file --mime-type -b "${{ env.MAIN_FOLDER }}/${FILENAME}")
               
               case "$MIME" in
@@ -135,18 +135,25 @@ jobs:
                 *)                     EXT="" ;;
               esac
               
-              # تغییر نام با پسوند
-              FINAL_NAME="${FILENAME}${EXT}"
-              mv "${{ env.MAIN_FOLDER }}/${FILENAME}" "${{ env.MAIN_FOLDER }}/${FINAL_NAME}"
+              # اضافه کردن پسوند واقعی (اگه از قبل نداشت)
+              if [[ "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]]; then
+                # قبلاً پسوند داره
+                FINAL_NAME="$FILENAME"
+              else
+                # پسوند نداره، پسوند واقعی رو اضافه کن
+                FINAL_NAME="${FILENAME}${EXT}"
+                mv "${{ env.MAIN_FOLDER }}/${FILENAME}" "${{ env.MAIN_FOLDER }}/${FINAL_NAME}"
+              fi
+              
               echo "📄 $FINAL_NAME"
               
-              # فشرده‌سازی (مستقیم توی پوشه اصلی، بدون زیرپوشه)
+              # فشرده‌سازی با BASENAME (بدون پسوند)
               echo "🗜️ فشرده‌سازی..."
               cd "${{ env.MAIN_FOLDER }}"
               
               if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=1 -v95m \
-                   "${FILENAME}.7z" "$FINAL_NAME" > /dev/null 2>&1; then
-                echo "✅ فشرده شد"
+                   "${BASENAME}.7z" "$FINAL_NAME" > /dev/null 2>&1; then
+                echo "✅ فشرده شد: ${BASENAME}.7z.xxx"
                 rm -f "$FINAL_NAME"
                 success=$((success + 1))
               else
