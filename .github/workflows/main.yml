@@ -1,10 +1,10 @@
-name: دانلود چند فایل (Debug Enhanced)
+name: دانلود چند فایل (بهینه و سریع)
 
 on:
   workflow_dispatch:
     inputs:
       file_urls:
-        description: 'لینک‌ها با جداکننده |'
+        description: 'لینک‌ها با جداکننده ;'
         required: true
         type: string
       zip_password:
@@ -37,8 +37,7 @@ jobs:
 
       - name: نصب پیش‌نیازها
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq p7zip-full curl wget
+          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full curl
 
       - name: ایجاد پوشه اصلی
         run: |
@@ -50,13 +49,11 @@ jobs:
           fi
           mkdir -p "$MAIN_FOLDER"
           echo "MAIN_FOLDER=$MAIN_FOLDER" >> $GITHUB_ENV
-          echo "پوشه اصلی: $MAIN_FOLDER"
+          echo "📁 پوشه: $MAIN_FOLDER"
 
-      - name: پردازش و دانلود (با Debug کامل)
+      - name: دانلود و پردازش (بهینه‌شده)
         run: |
           DELIMITER="${{ github.event.inputs.delimiter }}"
-          
-          # تبدیل لینک‌ها به آرایه
           IFS="$DELIMITER" read -ra urls <<< "${{ github.event.inputs.file_urls }}"
           
           # پاکسازی لینک‌ها
@@ -67,232 +64,133 @@ jobs:
           done
           
           total_urls=${#clean_urls[@]}
-          echo "📊 تعداد کل لینک‌ها: $total_urls"
+          echo "📊 تعداد لینک: $total_urls"
           
-          success_count=0
-          fail_count=0
-          current=1
+          success=0
+          fail=0
           
-          for url in "${clean_urls[@]}"; do
+          for i in "${!clean_urls[@]}"; do
+            url="${clean_urls[$i]}"
+            current=$((i + 1))
+            
             echo ""
             echo "═════════════════════════════════════════════"
-            echo "📥 [$current از $total_urls] دانلود"
-            echo "🔗 URL: ${url:0:100}..."  # فقط ۱۰۰ حرف اول
+            echo "📥 [$current/$total_urls] ${url:0:80}..."
             echo "═════════════════════════════════════════════"
             
-            # استخراج نام فایل
-            FILENAME=$(basename "$url" | cut -d '?' -f1 | sed 's/[^a-zA-Z0-9._-]/_/g')
-            [ -z "$FILENAME" ] && FILENAME="file_${current}"
+            # اسم کوتاه: file_01, file_02 و...
+            FILENAME=$(printf "file_%02d" $current)
             
-            FILE_FOLDER="${{ env.MAIN_FOLDER }}/${FILENAME}"
-            mkdir -p "$FILE_FOLDER"
+            # دانلود مستقیم با اسم نهایی (بدون فایل موقت)
+            echo "⬇️ دانلود..."
             
-            # فایل موقت برای دانلود
-            TEMP_FILE="$FILE_FOLDER/downloaded_temp"
-            HEADERS_FILE="$FILE_FOLDER/headers.txt"
-            
-            # دانلود با نمایش پیشرفت و ذخیره هدرها
-            echo "⬇️ شروع دانلود (حداکثر ۱۵ دقیقه)..."
-            
-            DOWNLOAD_SUCCESS=false
-            
-            # تلاش اول: با curl و نمایش پیشرفت
-            if curl -L \
-                 --fail \
-                 --retry 5 \
-                 --retry-delay 10 \
-                 --retry-max-time 300 \
-                 --connect-timeout 60 \
-                 --max-time 900 \
-                 --dump-header "$HEADERS_FILE" \
-                 --progress-bar \
-                 -o "$TEMP_FILE" \
+            if curl -L --fail --retry 3 --retry-delay 5 \
+                 --connect-timeout 30 --max-time 600 \
+                 -o "${{ env.MAIN_FOLDER }}/${FILENAME}" \
                  "$url" 2>&1; then
               
-              FILE_SIZE=$(stat -c%s "$TEMP_FILE" 2>/dev/null || echo 0)
-              echo "✅ دانلود موفق - حجم: ${FILE_SIZE} بایت"
+              FILE_SIZE=$(stat -c%s "${{ env.MAIN_FOLDER }}/${FILENAME}")
               
-              # بررسی هدر HTTP
-              if [ -f "$HEADERS_FILE" ]; then
-                HTTP_CODE=$(head -1 "$HEADERS_FILE" | grep -oP '\d{3}')
-                echo "🔢 کد HTTP: $HTTP_CODE"
-              fi
-              
-              # اگه حجم فایل صفر باشه
               if [ "$FILE_SIZE" = "0" ]; then
-                echo "⚠️ حجم فایل صفر! دانلود ناموفق."
-              else
-                DOWNLOAD_SUCCESS=true
+                echo "❌ حجم صفر - رد شد"
+                rm -f "${{ env.MAIN_FOLDER }}/${FILENAME}"
+                fail=$((fail + 1))
+                continue
               fi
-            else
-              CURL_EXIT=$?
-              echo "❌ خطای curl (کد: $CURL_EXIT)"
               
-              # نمایش توضیح خطا
-              case $CURL_EXIT in
-                6)  echo "   ↳ نمی‌توان به سرور متصل شد (DNS)" ;;
-                7)  echo "   ↳ اتصال به سرور失敗" ;;
-                22) echo "   ↳ خطای HTTP (مثلاً 404 یا 403)" ;;
-                28) echo "   ↳ timeout - زمان به پایان رسید" ;;
-                35) echo "   ↳ خطای SSL/TLS" ;;
-                52) echo "   ↳ سرور پاسخی نداد" ;;
-                56) echo "   ↳ خطای دریافت داده" ;;
-                *)  echo "   ↳ کد خطای ناشناخته" ;;
+              echo "✅ دانلود شد: $(numfmt --to=iec $FILE_SIZE)"
+              
+              # تشخیص فرمت
+              MIME=$(file --mime-type -b "${{ env.MAIN_FOLDER }}/${FILENAME}")
+              
+              case "$MIME" in
+                video/mp4)             EXT=".mp4" ;;
+                video/x-matroska)      EXT=".mkv" ;;
+                video/webm)            EXT=".webm" ;;
+                video/x-msvideo)       EXT=".avi" ;;
+                video/quicktime)       EXT=".mov" ;;
+                video/x-flv)           EXT=".flv" ;;
+                audio/mpeg)            EXT=".mp3" ;;
+                audio/mp4)             EXT=".m4a" ;;
+                image/jpeg)            EXT=".jpg" ;;
+                image/png)             EXT=".png" ;;
+                image/gif)             EXT=".gif" ;;
+                application/pdf)       EXT=".pdf" ;;
+                application/zip)       EXT=".zip" ;;
+                application/x-rar)     EXT=".rar" ;;
+                application/x-7z-compressed) EXT=".7z" ;;
+                *)                     EXT="" ;;
               esac
-            fi
-            
-            # تلاش دوم با wget (اگه curl شکست خورد)
-            if [ "$DOWNLOAD_SUCCESS" = false ]; then
-              echo "🔄 تلاش دوم با wget..."
-              rm -f "$TEMP_FILE"
               
-              if wget --timeout=900 --tries=5 --wait=10 \
-                   --output-document="$TEMP_FILE" \
-                   --server-response \
-                   "$url" 2>&1; then
-                FILE_SIZE=$(stat -c%s "$TEMP_FILE" 2>/dev/null || echo 0)
-                echo "✅ دانلود با wget موفق - حجم: ${FILE_SIZE} بایت"
-                DOWNLOAD_SUCCESS=true
+              # تغییر نام با پسوند
+              FINAL_NAME="${FILENAME}${EXT}"
+              mv "${{ env.MAIN_FOLDER }}/${FILENAME}" "${{ env.MAIN_FOLDER }}/${FINAL_NAME}"
+              echo "📄 $FINAL_NAME"
+              
+              # فشرده‌سازی (مستقیم توی پوشه اصلی، بدون زیرپوشه)
+              echo "🗜️ فشرده‌سازی..."
+              cd "${{ env.MAIN_FOLDER }}"
+              
+              if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=1 -v95m \
+                   "${FILENAME}.7z" "$FINAL_NAME" > /dev/null 2>&1; then
+                echo "✅ فشرده شد"
+                rm -f "$FINAL_NAME"
+                success=$((success + 1))
               else
-                echo "❌ wget هم ناموفق بود"
+                echo "❌ خطای فشرده‌سازی"
+                fail=$((fail + 1))
               fi
-            fi
-            
-            # اگه همه تلاش‌ها ناموفق بود
-            if [ "$DOWNLOAD_SUCCESS" = false ]; then
-              echo "🚫 دانلود نهایی ناموفق - رد شدن از این فایل"
-              rm -rf "$FILE_FOLDER"
-              fail_count=$((fail_count + 1))
-              current=$((current + 1))
-              sleep 3
-              continue
-            fi
-            
-            # تشخیص نوع فایل و ادامه پردازش...
-            MIME_TYPE=$(file --mime-type -b "$TEMP_FILE" 2>/dev/null || echo "unknown")
-            echo "📊 MIME Type: $MIME_TYPE"
-            
-            case "$MIME_TYPE" in
-              application/zip)               EXT=".zip" ;;
-              application/x-rar)             EXT=".rar" ;;
-              application/x-7z-compressed)   EXT=".7z" ;;
-              application/pdf)               EXT=".pdf" ;;
-              application/x-msdownload)      EXT=".exe" ;;
-              application/vnd.android.package-archive) EXT=".apk" ;;
-              image/jpeg)                    EXT=".jpg" ;;
-              image/png)                     EXT=".png" ;;
-              image/gif)                     EXT=".gif" ;;
-              video/mp4)                     EXT=".mp4" ;;
-              video/x-matroska)              EXT=".mkv" ;;
-              video/webm)                    EXT=".webm" ;;
-              video/x-msvideo)               EXT=".avi" ;;
-              video/quicktime)               EXT=".mov" ;;
-              video/x-flv)                   EXT=".flv" ;;
-              audio/mpeg)                    EXT=".mp3" ;;
-              audio/mp4)                     EXT=".m4a" ;;
-              audio/ogg)                     EXT=".ogg" ;;
-              application/json)              EXT=".json" ;;
-              application/xml)               EXT=".xml" ;;
-              application/x-gzip)            EXT=".tar.gz" ;;
-              application/x-bzip2)           EXT=".tar.bz2" ;;
-              application/octet-stream)      
-                # فایل باینری - حدس بر اساس هدر HTTP
-                CONTENT_TYPE=$(grep -i "Content-Type:" "$HEADERS_FILE" 2>/dev/null | tail -1 | cut -d: -f2 | xargs)
-                echo "📋 Content-Type از هدر: $CONTENT_TYPE"
-                case "$CONTENT_TYPE" in
-                  *video*) EXT=".mp4" ;;
-                  *audio*) EXT=".mp3" ;;
-                  *pdf*)   EXT=".pdf" ;;
-                  *zip*)   EXT=".zip" ;;
-                  *)       EXT="" ;;
-                esac
-                ;;
-              text/html)                     
-                echo "⚠️ فایل HTML دریافت شد (احتمالاً صفحه خطا)"
-                EXT=".html" 
-                ;;
-              text/plain)                    EXT=".txt" ;;
-              *)                             
-                echo "⚠️ نوع فایل ناشناخته: $MIME_TYPE"
-                EXT="" 
-                ;;
-            esac
-            
-            FINAL_NAME="${FILENAME}${EXT}"
-            mv "$TEMP_FILE" "$FILE_FOLDER/${FINAL_NAME}"
-            echo "📄 نام نهایی: $FINAL_NAME"
-            
-            # فشرده‌سازی
-            echo "🗜️ در حال فشرده‌سازی..."
-            cd "$FILE_FOLDER"
-            
-            if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=3 -v95m \
-                 "archive.7z" "$FINAL_NAME" > /dev/null 2>&1; then
-              echo "✅ فشرده‌سازی موفق"
-              rm -f "$FINAL_NAME" "$HEADERS_FILE"
-              success_count=$((success_count + 1))
+              
+              cd - > /dev/null
             else
-              echo "❌ خطا در فشرده‌سازی"
-              fail_count=$((fail_count + 1))
+              echo "❌ خطای دانلود (کد: $?)"
+              fail=$((fail + 1))
             fi
             
-            cd - > /dev/null
-            
-            echo "📈 [$current از $total_urls] | ✅ موفق: $success_count | ❌ ناموفق: $fail_count"
-            current=$((current + 1))
-            sleep 3
+            echo "📈 [$current/$total_urls] ✅$success ❌$fail"
+            sleep 2
           done
           
           echo ""
           echo "═════════════════════════════════════════════"
-          echo "📊 آمار نهایی:"
-          echo "   کل: $total_urls"
-          echo "   موفق: $success_count"
-          echo "   ناموفق: $fail_count"
+          echo "📊 نهایی: کل=$total_urls | ✅$success | ❌$fail"
           echo "═════════════════════════════════════════════"
 
-      - name: commit و push تکه‌ها
+      - name: commit و push (بهینه‌شده)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          mapfile -t all_chunks < <(find "${{ env.MAIN_FOLDER }}" -name "archive.7z.*" 2>/dev/null | sort)
-          total=${#all_chunks[@]}
+          cd "${{ env.MAIN_FOLDER }}"
+          chunks=(*.7z.*)
+          total=${#chunks[@]}
           
           if [ $total -eq 0 ]; then
-            echo "❌ هیچ تکه‌ای یافت نشد!"
+            echo "❌ تکه‌ای نیست!"
             exit 1
           fi
           
-          echo "📦 مجموع تکه‌ها: $total"
+          echo "📦 $total تکه"
           
-          BATCH_SIZE=8
+          # هر بار ۱۵ تکه push کن
+          BATCH=15
           start=0
           
           while [ $start -lt $total ]; do
-            end=$((start + BATCH_SIZE - 1))
+            end=$((start + BATCH - 1))
             [ $end -ge $total ] && end=$((total - 1))
             
-            echo "📤 Push تکه‌های $((start+1)) تا $((end+1)) از $total"
+            echo "📤 [$((start+1))-$((end+1))]"
             
             for i in $(seq $start $end); do
-              git add "${all_chunks[$i]}"
+              git add "${chunks[$i]}"
             done
             
-            git commit -m "📦 Chunks $((start+1))-$((end+1)) [${{ env.MAIN_FOLDER }}]"
-            
-            for attempt in {1..5}; do
-              if git pull --rebase && git push; then
-                echo "✅ Push موفق"
-                break
-              else
-                echo "⚠️ تلاش $attempt - ۱۵ ثانیه صبر"
-                sleep 15
-              fi
-            done
+            git commit -m "📦 $((start+1))-$((end+1))/$total [${{ env.MAIN_FOLDER }}]"
+            git pull --rebase && git push || sleep 10 && git pull --rebase && git push
             
             start=$((end + 1))
-            sleep 3
+            sleep 2
           done
           
-          echo "🎉 آپلود کامل شد!"
+          echo "🎉 تموم!"
