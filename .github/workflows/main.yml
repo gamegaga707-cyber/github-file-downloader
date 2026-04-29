@@ -78,8 +78,21 @@ jobs:
             echo "📥 [$current/$total_urls] ${url:0:80}..."
             echo "═════════════════════════════════════════════"
             
-            # اسم کوتاه: file_01, file_02 و...
-            FILENAME=$(printf "file_%02d" $current)
+                     # تلاش برای پیدا کردن اسم واقعی فایل از URL
+            RAW_FILENAME=$(basename "$url" | cut -d '?' -f1 | sed 's/[^a-zA-Z0-9._-]/_/g')
+            
+            # اگر اسم فایل معنی‌دار بود (کمتر از ۶۰ کاراکتر و پسوند داشت)
+            if [ -n "$RAW_FILENAME" ] && [ ${#RAW_FILENAME} -lt 60 ] && [[ "$RAW_FILENAME" =~ \.[a-zA-Z0-9]+$ ]]; then
+              FILENAME="$RAW_FILENAME"
+              echo "📎 اسم اصلی: $FILENAME"
+            else
+              # برای لینک‌های طولانی، اسم ساده بذار
+              FILENAME=$(printf "file_%02d" $current)
+              echo "📎 اسم ساده: $FILENAME"
+            fi
+            
+            # حذف پسوند برای فشرده‌سازی
+            BASENAME="${FILENAME%.*}"
             
             # دانلود مستقیم با اسم نهایی (بدون فایل موقت)
             echo "⬇️ دانلود..."
