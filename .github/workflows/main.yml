@@ -1,4 +1,4 @@
-name: دانلود چند فایل (سرعت بالا + درصد زنده + حجم کل)
+name: دانلود چند فایل (سرعت بالا + اسم درست)
 
 on:
   workflow_dispatch:
@@ -39,7 +39,7 @@ jobs:
 
       - name: نصب پیش‌نیازها
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full aria2
+          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full
 
       - name: ایجاد پوشه اصلی
         run: |
@@ -53,7 +53,7 @@ jobs:
           echo "MAIN_FOLDER=$MAIN_FOLDER" >> $GITHUB_ENV
           echo "📁 پوشه: $MAIN_FOLDER"
 
-      - name: دانلود و پردازش (با درصد زنده)
+      - name: دانلود و پردازش (سرعت بالا)
         run: |
           DELIMITER="${{ github.event.inputs.delimiter }}"
           IFS="$DELIMITER" read -ra urls <<< "${{ github.event.inputs.file_urls }}"
@@ -69,15 +69,15 @@ jobs:
           
           success=0
           fail=0
-          file_index=0
-          total_bytes=0  # مجموع حجم فایل‌های دانلود شده
+          
+          declare -a dl_files
+          
+          echo "🚀 شروع دانلود موازی $total_urls فایل..."
           
           for i in "${!clean_urls[@]}"; do
             url="${clean_urls[$i]}"
             current=$((i + 1))
-            file_index=$((file_index + 1))
             
-            # استخراج نام فایل از URL
             RAW_FILENAME=$(echo "$url" | grep -oP '[^/]+\.(mp4|mkv|avi|mov|webm|flv|mp3|m4a|jpg|png|gif|pdf|zip|rar|7z)(\?.*)?$' | cut -d '?' -f1)
             
             if [ -z "$RAW_FILENAME" ]; then
@@ -90,77 +90,82 @@ jobs:
               FILENAME=$(printf "file_%02d" $current)
             fi
             
-            echo ""
-            echo "═════════════════════════════════════════════"
             echo "📥 [$current/$total_urls] $FILENAME"
             
-            # دانلود با aria2c - نوار پیشرفت زنده
-            if aria2c --summary-interval=0 --console-log-level=notice \
-                 --allow-overwrite=true --max-tries=5 --retry-wait=5 \
-                 --connect-timeout=20 --timeout=600 \
-                 --dir="${{ env.MAIN_FOLDER }}" --out="$FILENAME" \
-                 "$url" 2>&1; then
-              
-              FILE_SIZE=$(stat -c%s "${{ env.MAIN_FOLDER }}/${FILENAME}" 2>/dev/null || echo 0)
-              if [ "$FILE_SIZE" = "0" ]; then
-                echo "❌ حجم صفر - رد شد"
-                rm -f "${{ env.MAIN_FOLDER }}/${FILENAME}"
-                fail=$((fail + 1))
-                continue
-              fi
-              
-              echo "✅ $FILENAME ($(numfmt --to=iec $FILE_SIZE))"
-              total_bytes=$((total_bytes + FILE_SIZE))  # افزودن حجم به مجموع
-              
-              # تشخیص نوع فایل
-              MIME=$(file --mime-type -b "${{ env.MAIN_FOLDER }}/${FILENAME}" 2>/dev/null)
-              
-              case "$MIME" in
-                video/mp4)             EXT=".mp4" ;;
-                video/x-matroska)      EXT=".mkv" ;;
-                video/webm)            EXT=".webm" ;;
-                video/x-msvideo)       EXT=".avi" ;;
-                video/quicktime)       EXT=".mov" ;;
-                audio/mpeg)            EXT=".mp3" ;;
-                audio/mp4)             EXT=".m4a" ;;
-                image/jpeg)            EXT=".jpg" ;;
-                image/png)             EXT=".png" ;;
-                application/pdf)       EXT=".pdf" ;;
-                application/zip)       EXT=".zip" ;;
-              esac
-              
-              if [ -n "$EXT" ] && [[ ! "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]]; then
-                mv "${{ env.MAIN_FOLDER }}/${FILENAME}" "${{ env.MAIN_FOLDER }}/${FILENAME}${EXT}"
-                FILENAME="${FILENAME}${EXT}"
-              fi
-              
-              # اسم ساده برای فایل فشرده: file_01, file_02 و...
-              ARCHIVE_NAME=$(printf "file_%02d" $file_index)
-              
-              cd "${{ env.MAIN_FOLDER }}"
-              
-              if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=0 -v95m \
-                   "${ARCHIVE_NAME}.7z" "$FILENAME" > /dev/null 2>&1; then
-                echo "  🗜️ ${ARCHIVE_NAME}.7z.xxx (حاوی: $FILENAME)"
-                rm -f "$FILENAME"
-                success=$((success + 1))
-              else
-                echo "  ❌ خطای فشرده‌سازی"
-                fail=$((fail + 1))
-              fi
-              
-              cd - > /dev/null
+            curl -L --fail --retry 3 --retry-delay 3 \
+                 --connect-timeout 20 --max-time 900 \
+                 -o "${{ env.MAIN_FOLDER }}/${FILENAME}" \
+                 "$url" 2>/dev/null &
+            
+            dl_files+=("$FILENAME")
+          done
+          
+          echo "⏳ منتظر اتمام دانلودها..."
+          wait
+          echo "✅ همه دانلودها تموم شد!"
+          
+          cd "${{ env.MAIN_FOLDER }}"
+          
+          file_index=0
+          for FILENAME in "${dl_files[@]}"; do
+            file_index=$((file_index + 1))
+            
+            if [ ! -f "$FILENAME" ]; then
+              echo "❌ $FILENAME دانلود نشد!"
+              fail=$((fail + 1))
+              continue
+            fi
+            
+            FILE_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || echo 0)
+            
+            if [ "$FILE_SIZE" = "0" ]; then
+              echo "❌ $FILENAME حجم صفر - رد شد"
+              rm -f "$FILENAME"
+              fail=$((fail + 1))
+              continue
+            fi
+            
+            echo "✅ $FILENAME ($(numfmt --to=iec $FILE_SIZE))"
+            
+            MIME=$(file --mime-type -b "$FILENAME" 2>/dev/null)
+            
+            case "$MIME" in
+              video/mp4)             EXT=".mp4" ;;
+              video/x-matroska)      EXT=".mkv" ;;
+              video/webm)            EXT=".webm" ;;
+              video/x-msvideo)       EXT=".avi" ;;
+              video/quicktime)       EXT=".mov" ;;
+              audio/mpeg)            EXT=".mp3" ;;
+              audio/mp4)             EXT=".m4a" ;;
+              image/jpeg)            EXT=".jpg" ;;
+              image/png)             EXT=".png" ;;
+              application/pdf)       EXT=".pdf" ;;
+              application/zip)       EXT=".zip" ;;
+            esac
+            
+            if [ -n "$EXT" ] && [[ ! "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]]; then
+              mv "$FILENAME" "${FILENAME}${EXT}"
+              FILENAME="${FILENAME}${EXT}"
+            fi
+            
+            ARCHIVE_NAME=$(printf "file_%02d" $file_index)
+            
+            if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=0 -v95m \
+                 "${ARCHIVE_NAME}.7z" "$FILENAME" > /dev/null 2>&1; then
+              echo "  🗜️ ${ARCHIVE_NAME}.7z.xxx (حاوی: $FILENAME)"
+              rm -f "$FILENAME"
+              success=$((success + 1))
             else
-              echo "❌ خطای دانلود $FILENAME"
+              echo "  ❌ خطای فشرده‌سازی"
               fail=$((fail + 1))
             fi
           done
           
+          cd - > /dev/null
+          
           echo ""
           echo "═════════════════════════════════════════════"
-          echo "📊 آمار نهایی: کل=$total_urls | ✅$success | ❌$fail"
-          echo "📊 مجموع حجم دانلود موفق: $(numfmt --to=iec $total_bytes)"
-          echo "═════════════════════════════════════════════"
+          echo "📊 نهایی: کل=$total_urls | ✅$success | ❌$fail"
 
       - name: commit و push (بهینه‌شده)
         run: |
