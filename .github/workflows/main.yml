@@ -30,16 +30,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: دریافت مخزن (فقط ساختار git، بدون فایل)
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            .nonexistent-file
-          sparse-checkout-cone-mode: false
-
       - name: نصب پیش‌نیازها
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full aria2 parallel
+          sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full curl
 
       - name: ایجاد پوشه اصلی
         run: |
@@ -53,12 +46,12 @@ jobs:
           echo "MAIN_FOLDER=$MAIN_FOLDER" >> $GITHUB_ENV
           echo "📁 پوشه: $MAIN_FOLDER"
 
-      - name: دانلود و پردازش (سرعت بالا با aria2)
+      - name: دانلود و پردازش (سرعت بالا)
         run: |
           DELIMITER="${{ github.event.inputs.delimiter }}"
           IFS="$DELIMITER" read -ra urls <<< "${{ github.event.inputs.file_urls }}"
           
-          # پاکسازی URL ها
+          # پاکسازی لینک‌ها
           clean_urls=()
           for url in "${urls[@]}"; do
             url=$(echo "$url" | xargs)
@@ -68,77 +61,62 @@ jobs:
           total_urls=${#clean_urls[@]}
           echo "📊 تعداد لینک: $total_urls"
           
-          # ایجاد فایل ورودی برای aria2 با نام‌های اختصاصی
-          ARIA2_INPUT="/tmp/aria2_urls.txt"
-          > "$ARIA2_INPUT"
+          success=0
+          fail=0
           
-          declare -A url_to_name
+          # آرایه برای نگهداری اسم فایل‌ها
+          declare -a dl_files
+          
+          # ====== مرحله ۱: دانلود همه فایل‌ها به صورت موازی ======
+          echo "🚀 شروع دانلود موازی $total_urls فایل..."
           
           for i in "${!clean_urls[@]}"; do
             url="${clean_urls[$i]}"
             current=$((i + 1))
             
-            # استخراج نام فایل از URL
+            # استخراج اسم فایل از URL
             RAW_FILENAME=$(echo "$url" | grep -oP '[^/]+\.(mp4|mkv|avi|mov|webm|flv|mp3|m4a|jpg|png|gif|pdf|zip|rar|7z)(\?.*)?$' | cut -d '?' -f1)
             
             if [ -z "$RAW_FILENAME" ]; then
               RAW_FILENAME=$(basename "$url" | cut -d '?' -f1 | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))" 2>/dev/null || basename "$url" | cut -d '?' -f1)
             fi
             
-            # پاکسازی نام فایل
-            FILENAME=$(echo "$RAW_FILENAME" | sed 's/[^a-zA-Z0-9._-]/_/g' | sed 's/__*/_/g')
+            # حذف کاراکترهای غیرمجاز
+            FILENAME=$(echo "$RAW_FILENAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
             
-            # اگر نام معتبر نبود، نام پیش‌فرض
-            if [ -z "$FILENAME" ] || [ ${#FILENAME} -lt 3 ] || [ ${#FILENAME} -gt 100 ]; then
-              EXT="${RAW_FILENAME##*.}"
-              FILENAME="file_$(printf "%03d" $current).${EXT}"
+            # اگه اسم معنی‌دار نبود، اسم ساده بذار
+            if [ -z "$FILENAME" ] || [ ${#FILENAME} -lt 3 ] || [ ${#FILENAME} -gt 80 ]; then
+              FILENAME=$(printf "file_%02d" $current)
             fi
             
-            # جلوگیری از نام‌های تکراری
-            if [ -f "${{ env.MAIN_FOLDER }}/${FILENAME}" ] || [ "${url_to_name[$FILENAME]}" ]; then
-              BASE="${FILENAME%.*}"
-              EXT="${FILENAME##*.}"
-              FILENAME="${BASE}_$(printf "%03d" $current).${EXT}"
-            fi
-            
-            url_to_name[$FILENAME]=1
-            echo "$url" >> "$ARIA2_INPUT"
-            echo "  out=$FILENAME" >> "$ARIA2_INPUT"
             echo "📥 [$current/$total_urls] $FILENAME"
+            
+            # دانلود در پس‌زمینه (همه همزمان)
+            curl -L --fail --retry 3 --retry-delay 3 \
+                 --connect-timeout 20 --max-time 900 \
+                 -o "${{ env.MAIN_FOLDER }}/${FILENAME}" \
+                 "$url" 2>/dev/null &
+            
+            dl_files+=("$FILENAME")
           done
           
-          echo "🚀 شروع دانلود موازی با aria2 (اتصالات همزمان)..."
-          
-          # دانلود با aria2 - بهینه‌سازی شده برای سرعت
-          aria2c \
-            --input-file="$ARIA2_INPUT" \
-            --dir="${{ env.MAIN_FOLDER }}" \
-            --max-concurrent-downloads="$total_urls" \
-            --max-connection-per-server=8 \
-            --split=8 \
-            --min-split-size=1M \
-            --max-tries=5 \
-            --retry-wait=3 \
-            --timeout=30 \
-            --connect-timeout=10 \
-            --allow-overwrite=false \
-            --auto-file-renaming=false \
-            --file-allocation=none \
-            --console-log-level=notice \
-            --summary-interval=0
-          
+          # صبر کن تا همه دانلودها تموم بشن
+          echo "⏳ منتظر اتمام دانلودها..."
+          wait
           echo "✅ همه دانلودها تموم شد!"
           
+          # ====== مرحله ۲: بررسی و فشرده‌سازی ======
           cd "${{ env.MAIN_FOLDER }}"
           
-          # پردازش فایل‌های دانلود شده
-          success=0
-          fail=0
           file_index=0
-          
-          for FILENAME in *; do
-            [ ! -f "$FILENAME" ] && continue
+          for FILENAME in "${dl_files[@]}"; do
             file_index=$((file_index + 1))
+            
+            if [ ! -f "$FILENAME" ]; then
+              echo "❌ $FILENAME دانلود نشد!"
+              fail=$((fail + 1))
+              continue
+            fi
             
             FILE_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || echo 0)
             
@@ -149,41 +127,39 @@ jobs:
               continue
             fi
             
-            echo "✅ $FILENAME ($(numfmt --to=iec $FILE_SIZE 2>/dev/null || echo $FILE_SIZE))"
+            echo "✅ $FILENAME ($(numfmt --to=iec $FILE_SIZE))"
             
-            # تشخیص نوع فایل و اصلاح پسوند
+            # تشخیص فرمت واقعی
             MIME=$(file --mime-type -b "$FILENAME" 2>/dev/null)
-            
             EXT=""
+            
             case "$MIME" in
               video/mp4)             EXT=".mp4" ;;
               video/x-matroska)      EXT=".mkv" ;;
               video/webm)            EXT=".webm" ;;
               video/x-msvideo)       EXT=".avi" ;;
               video/quicktime)       EXT=".mov" ;;
-              video/x-flv)           EXT=".flv" ;;
               audio/mpeg)            EXT=".mp3" ;;
-              audio/mp4|audio/x-m4a) EXT=".m4a" ;;
+              audio/mp4)             EXT=".m4a" ;;
               image/jpeg)            EXT=".jpg" ;;
               image/png)             EXT=".png" ;;
-              image/gif)             EXT=".gif" ;;
               application/pdf)       EXT=".pdf" ;;
               application/zip)       EXT=".zip" ;;
-              application/x-rar)     EXT=".rar" ;;
-              application/x-7z-compressed) EXT=".7z" ;;
             esac
             
-            if [ -n "$EXT" ] && [[ ! "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]]; then
-              mv "$FILENAME" "${FILENAME}${EXT}" 2>/dev/null
+            # اضافه کردن پسوند اگه نداره
+            if [[ ! "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]] && [ -n "$EXT" ]; then
+              mv "$FILENAME" "${FILENAME}${EXT}"
               FILENAME="${FILENAME}${EXT}"
             fi
             
-            # فشرده‌سازی با 7z
-            ARCHIVE_NAME=$(printf "file_%03d" $file_index)
+            # اسم ساده برای فایل فشرده: file_01, file_02, ...
+            ARCHIVE_NAME=$(printf "file_%02d" $file_index)
             
+            # فشرده‌سازی سریع (فایل داخلش اسم اصلی رو حفظ می‌کنه)
             if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=0 -v95m \
                  "${ARCHIVE_NAME}.7z" "$FILENAME" > /dev/null 2>&1; then
-              echo "  🗜️ ${ARCHIVE_NAME}.7z.* (حاوی: $FILENAME)"
+              echo "  🗜️ ${ARCHIVE_NAME}.7z.xxx (حاوی: $FILENAME)"
               rm -f "$FILENAME"
               success=$((success + 1))
             else
@@ -197,21 +173,15 @@ jobs:
           echo ""
           echo "═════════════════════════════════════════════"
           echo "📊 نهایی: کل=$total_urls | ✅$success | ❌$fail"
+          echo "═════════════════════════════════════════════"
 
       - name: commit و push (بهینه‌شده)
         run: |
-          git sparse-checkout disable
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           cd "${{ env.MAIN_FOLDER }}"
-          
-          # پیدا کردن همه تکه‌ها
-          chunks=()
-          for f in *.7z.*; do
-            [ -f "$f" ] && chunks+=("$f")
-          done
-          
+          chunks=(*.7z.*)
           total=${#chunks[@]}
           
           if [ $total -eq 0 ]; then
@@ -219,7 +189,7 @@ jobs:
             exit 1
           fi
           
-          echo "📦 $total تکه پیدا شد"
+          echo "📦 $total تکه"
           
           BATCH=15
           start=0
@@ -228,23 +198,17 @@ jobs:
             end=$((start + BATCH - 1))
             [ $end -ge $total ] && end=$((total - 1))
             
-            echo "📤 Batch [$((start+1))-$((end+1))] از $total"
+            echo "📤 [$((start+1))-$((end+1))]"
             
             for i in $(seq $start $end); do
               git add "${chunks[$i]}"
             done
             
             git commit -m "📦 $((start+1))-$((end+1))/$total [${{ env.MAIN_FOLDER }}]"
-            
-            # تلاش برای push با retry
-            for retry in 1 2 3; do
-              if git pull --rebase 2>/dev/null && git push 2>/dev/null; then
-                break
-              fi
-              sleep $(($retry * 3))
-            done
+            git pull --rebase && git push || sleep 10 && git pull --rebase && git push
             
             start=$((end + 1))
+            sleep 2
           done
           
           echo "🎉 تموم!"
