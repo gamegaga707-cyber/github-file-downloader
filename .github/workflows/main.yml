@@ -30,6 +30,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: دریافت مخزن (فقط ساختار git)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .nonexistent-file
+          sparse-checkout-cone-mode: false
+
       - name: نصب پیش‌نیازها
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full curl
@@ -51,7 +58,6 @@ jobs:
           DELIMITER="${{ github.event.inputs.delimiter }}"
           IFS="$DELIMITER" read -ra urls <<< "${{ github.event.inputs.file_urls }}"
           
-          # پاکسازی لینک‌ها
           clean_urls=()
           for url in "${urls[@]}"; do
             url=$(echo "$url" | xargs)
@@ -63,47 +69,47 @@ jobs:
           
           success=0
           fail=0
+          total_bytes=0
           
-          # آرایه برای نگهداری اسم فایل‌ها
           declare -a dl_files
           
-          # ====== مرحله ۱: دانلود همه فایل‌ها به صورت موازی ======
           echo "🚀 شروع دانلود موازی $total_urls فایل..."
           
           for i in "${!clean_urls[@]}"; do
             url="${clean_urls[$i]}"
             current=$((i + 1))
             
-            # استخراج اسم فایل از URL
             RAW_FILENAME=$(echo "$url" | grep -oP '[^/]+\.(mp4|mkv|avi|mov|webm|flv|mp3|m4a|jpg|png|gif|pdf|zip|rar|7z)(\?.*)?$' | cut -d '?' -f1)
             
             if [ -z "$RAW_FILENAME" ]; then
               RAW_FILENAME=$(basename "$url" | cut -d '?' -f1 | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))" 2>/dev/null || basename "$url" | cut -d '?' -f1)
             fi
             
-            # حذف کاراکترهای غیرمجاز
             FILENAME=$(echo "$RAW_FILENAME" | sed 's/[^a-zA-Z0-9._-]/_/g')
             
-            # اگه اسم معنی‌دار نبود، اسم ساده بذار
             if [ -z "$FILENAME" ] || [ ${#FILENAME} -lt 3 ] || [ ${#FILENAME} -gt 80 ]; then
               FILENAME=$(printf "file_%02d" $current)
             fi
             
             echo "📥 [$current/$total_urls] $FILENAME"
             
-            # دانلود در پس‌زمینه (همه همزمان)
+            # دانلود در پس‌زمینه با timeout
             curl -L --fail --retry 3 --retry-delay 3 \
-                 --connect-timeout 20 --max-time 900 \
+                 --connect-timeout 20 --max-time 600 \
                  -o "${{ env.MAIN_FOLDER }}/${FILENAME}" \
                  "$url" 2>/dev/null &
             
             dl_files+=("$FILENAME")
           done
           
-          # صبر کن تا همه دانلودها تموم بشن
-          echo "⏳ منتظر اتمام دانلودها..."
-          wait
-          echo "✅ همه دانلودها تموم شد!"
+          # صبر با timeout (حداکثر ۱۵ دقیقه)
+          echo "⏳ منتظر اتمام دانلودها (حداکثر ۱۵ دقیقه)..."
+          timeout 900 wait 2>/dev/null || true
+          
+          # کشتن پروسه‌های curl که هنوز زنده‌ان
+          pkill -f "curl" 2>/dev/null || true
+          
+          echo "✅ دانلودها تموم شد (یا timeout)!"
           
           # ====== مرحله ۲: بررسی و فشرده‌سازی ======
           cd "${{ env.MAIN_FOLDER }}"
@@ -128,10 +134,9 @@ jobs:
             fi
             
             echo "✅ $FILENAME ($(numfmt --to=iec $FILE_SIZE))"
+            total_bytes=$((total_bytes + FILE_SIZE))
             
-            # تشخیص فرمت واقعی
             MIME=$(file --mime-type -b "$FILENAME" 2>/dev/null)
-            EXT=""
             
             case "$MIME" in
               video/mp4)             EXT=".mp4" ;;
@@ -147,16 +152,13 @@ jobs:
               application/zip)       EXT=".zip" ;;
             esac
             
-            # اضافه کردن پسوند اگه نداره
-            if [[ ! "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]] && [ -n "$EXT" ]; then
+            if [ -n "$EXT" ] && [[ ! "$FILENAME" =~ \.[a-zA-Z0-9]+$ ]]; then
               mv "$FILENAME" "${FILENAME}${EXT}"
               FILENAME="${FILENAME}${EXT}"
             fi
             
-            # اسم ساده برای فایل فشرده: file_01, file_02, ...
             ARCHIVE_NAME=$(printf "file_%02d" $file_index)
             
-            # فشرده‌سازی سریع (فایل داخلش اسم اصلی رو حفظ می‌کنه)
             if 7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=0 -v95m \
                  "${ARCHIVE_NAME}.7z" "$FILENAME" > /dev/null 2>&1; then
               echo "  🗜️ ${ARCHIVE_NAME}.7z.xxx (حاوی: $FILENAME)"
@@ -173,10 +175,12 @@ jobs:
           echo ""
           echo "═════════════════════════════════════════════"
           echo "📊 نهایی: کل=$total_urls | ✅$success | ❌$fail"
+          echo "📊 مجموع حجم: $(numfmt --to=iec $total_bytes)"
           echo "═════════════════════════════════════════════"
 
       - name: commit و push (بهینه‌شده)
         run: |
+          git sparse-checkout disable
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
@@ -205,10 +209,9 @@ jobs:
             done
             
             git commit -m "📦 $((start+1))-$((end+1))/$total [${{ env.MAIN_FOLDER }}]"
-            git pull --rebase && git push || sleep 10 && git pull --rebase && git push
+            git pull --rebase && git push || sleep 5 && git pull --rebase && git push
             
             start=$((end + 1))
-            sleep 2
           done
           
           echo "🎉 تموم!"
