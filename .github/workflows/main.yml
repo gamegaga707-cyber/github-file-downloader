@@ -53,7 +53,7 @@ jobs:
           echo "MAIN_FOLDER=$MAIN_FOLDER" >> $GITHUB_ENV
           echo "📁 پوشه: $MAIN_FOLDER"
 
-      - name: دانلود و پردازش (سرعت بالا)
+            - name: دانلود و پردازش (سرعت بالا)
         run: |
           DELIMITER="${{ github.event.inputs.delimiter }}"
           IFS="$DELIMITER" read -ra urls <<< "${{ github.event.inputs.file_urls }}"
@@ -70,8 +70,6 @@ jobs:
           success=0
           fail=0
           total_bytes=0
-          
-          declare -a dl_files
           
           echo "🚀 شروع دانلود موازی $total_urls فایل..."
           
@@ -93,36 +91,29 @@ jobs:
             
             echo "📥 [$current/$total_urls] $FILENAME"
             
-            # دانلود در پس‌زمینه با timeout
+            # دانلود در پس‌زمینه - هر curl حداکثر ۱۰ دقیقه وقت داره
             curl -L --fail --retry 3 --retry-delay 3 \
                  --connect-timeout 20 --max-time 600 \
                  -o "${{ env.MAIN_FOLDER }}/${FILENAME}" \
                  "$url" 2>/dev/null &
-            
-            dl_files+=("$FILENAME")
           done
           
-          # صبر با timeout (حداکثر ۱۵ دقیقه)
-          echo "⏳ منتظر اتمام دانلودها (حداکثر ۱۵ دقیقه)..."
-          timeout 900 wait 2>/dev/null || true
+          # صبر کن تا همه تموم بشن (هر چقدر طول بکشه)
+          echo "⏳ منتظر اتمام دانلودها..."
+          wait
+          echo "✅ همه دانلودها تموم شد!"
           
-          # کشتن پروسه‌های curl که هنوز زنده‌ان
-          pkill -f "curl" 2>/dev/null || true
-          
-          echo "✅ دانلودها تموم شد (یا timeout)!"
-          
-          # ====== مرحله ۲: بررسی و فشرده‌سازی ======
+          # ====== بررسی و فشرده‌سازی ======
           cd "${{ env.MAIN_FOLDER }}"
           
+          # ببینیم چه فایل‌هایی اومدن
+          echo "📂 محتویات پوشه:"
+          ls -lh
+          
           file_index=0
-          for FILENAME in "${dl_files[@]}"; do
+          for FILENAME in *; do
+            [ -f "$FILENAME" ] || continue
             file_index=$((file_index + 1))
-            
-            if [ ! -f "$FILENAME" ]; then
-              echo "❌ $FILENAME دانلود نشد!"
-              fail=$((fail + 1))
-              continue
-            fi
             
             FILE_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || echo 0)
             
@@ -177,7 +168,7 @@ jobs:
           echo "📊 نهایی: کل=$total_urls | ✅$success | ❌$fail"
           echo "📊 مجموع حجم: $(numfmt --to=iec $total_bytes)"
           echo "═════════════════════════════════════════════"
-
+          
       - name: commit و push (بهینه‌شده)
         run: |
           git sparse-checkout disable
