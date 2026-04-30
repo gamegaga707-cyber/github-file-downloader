@@ -30,10 +30,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: دریافت کد مخزن
+      - name: دریافت کد مخزن (فقط متادیتا، بدون فایل‌های حجیم)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          filter: blob:none
 
       - name: نصب پیش‌نیازها
         run: sudo apt-get update -qq && sudo apt-get install -y -qq p7zip-full curl
