@@ -53,7 +53,7 @@ jobs:
           echo "MAIN_FOLDER=$MAIN_FOLDER" >> $GITHUB_ENV
           echo "📁 پوشه: $MAIN_FOLDER"
 
-            - name: دانلود و پردازش (سرعت بالا)
+      - name: دانلود و پردازش (سرعت بالا)
         run: |
           DELIMITER="${{ github.event.inputs.delimiter }}"
           IFS="$DELIMITER" read -ra urls <<< "${{ github.event.inputs.file_urls }}"
@@ -91,22 +91,18 @@ jobs:
             
             echo "📥 [$current/$total_urls] $FILENAME"
             
-            # دانلود در پس‌زمینه - هر curl حداکثر ۱۰ دقیقه وقت داره
             curl -L --fail --retry 3 --retry-delay 3 \
                  --connect-timeout 20 --max-time 600 \
                  -o "${{ env.MAIN_FOLDER }}/${FILENAME}" \
                  "$url" 2>/dev/null &
           done
           
-          # صبر کن تا همه تموم بشن (هر چقدر طول بکشه)
           echo "⏳ منتظر اتمام دانلودها..."
           wait
           echo "✅ همه دانلودها تموم شد!"
           
-          # ====== بررسی و فشرده‌سازی ======
           cd "${{ env.MAIN_FOLDER }}"
           
-          # ببینیم چه فایل‌هایی اومدن
           echo "📂 محتویات پوشه:"
           ls -lh
           
@@ -168,7 +164,7 @@ jobs:
           echo "📊 نهایی: کل=$total_urls | ✅$success | ❌$fail"
           echo "📊 مجموع حجم: $(numfmt --to=iec $total_bytes)"
           echo "═════════════════════════════════════════════"
-          
+
       - name: commit و push (بهینه‌شده)
         run: |
           git sparse-checkout disable
