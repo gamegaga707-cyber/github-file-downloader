@@ -36,7 +36,7 @@ jobs:
           mkdir -p "$WORK_DIR/$FOLDER"
           
           echo "📋 دریافت لیست فایل‌ها..."
-          FILES=$(curl -s "https://api.github.com/repos/S1ipKn0T/github-file-downloader/contents/downloads/$FOLDER?ref=main")
+          FILES=$(curl -s "https://api.github.com/repos/gamegaga707-cyber/github-file-downloader/contents/downloads/$FOLDER?ref=main")
 
           # --- گروه‌بندی خانواده‌ها ---
           echo "🧠 گروه‌بندی فایل‌ها بر اساس خانواده (base name)..."
